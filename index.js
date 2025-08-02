@@ -1,8 +1,15 @@
+const express = require('express');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
 const LOG_FILE = path.join(__dirname, 'webhook_logs.json');
 const BLOCKED_FILE = path.join(__dirname, 'blocked_webhooks.json');
+
+app.use(express.json());
 
 let blockedWebhooks = [];
 try {
@@ -56,7 +63,7 @@ app.post('/api/:webhookId/:webhookToken', async (req, res) => {
   }
 });
 
-app.post('/admin/block', express.json(), (req, res) => {
+app.post('/admin/block', (req, res) => {
   const { webhookId, webhookToken } = req.body;
   if (!webhookId || !webhookToken) {
     return res.status(400).json({ error: "webhookId and webhookToken required" });
@@ -77,4 +84,8 @@ app.get('/admin/logs', (req, res) => {
   } catch {
     res.json([]);
   }
+});
+
+app.listen(PORT, () => {
+  console.log(`Webhook forwarder running on port ${PORT}`);
 });
