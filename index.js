@@ -1,13 +1,51 @@
-const express = require("express");
-const axios = require("axios");
-const app = express();
-const PORT = process.env.PORT || 3000;
+const fs = require('fs');
+const path = require('path');
 
-app.use(express.json());
+const LOG_FILE = path.join(__dirname, 'webhook_logs.json');
+const BLOCKED_FILE = path.join(__dirname, 'blocked_webhooks.json');
 
-app.post("/api/:webhookId/:webhookToken", async (req, res) => {
+let blockedWebhooks = [];
+try {
+  blockedWebhooks = JSON.parse(fs.readFileSync(BLOCKED_FILE, 'utf8'));
+} catch {
+  blockedWebhooks = [];
+}
+
+function saveBlocked() {
+  fs.writeFileSync(BLOCKED_FILE, JSON.stringify(blockedWebhooks, null, 2));
+}
+
+function logWebhookUse(webhookId, webhookToken, body, ip) {
+  let logs = [];
+  try {
+    logs = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8'));
+  } catch {
+    logs = [];
+  }
+  logs.push({
+    webhookId,
+    webhookToken,
+    timestamp: new Date().toISOString(),
+    ip,
+    body,
+  });
+  fs.writeFileSync(LOG_FILE, JSON.stringify(logs, null, 2));
+}
+
+app.use('/api/:webhookId/:webhookToken', (req, res, next) => {
+  const { webhookId, webhookToken } = req.params;
+  if (blockedWebhooks.some(w => w.id === webhookId && w.token === webhookToken)) {
+    return res.status(403).json({ error: 'This webhook has been revoked.' });
+  }
+  next();
+});
+
+app.post('/api/:webhookId/:webhookToken', async (req, res) => {
   const { webhookId, webhookToken } = req.params;
   const discordWebhook = `https://discord.com/api/webhooks/${webhookId}/${webhookToken}`;
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+  logWebhookUse(webhookId, webhookToken, req.body, ip);
 
   try {
     await axios.post(discordWebhook, req.body);
@@ -18,6 +56,25 @@ app.post("/api/:webhookId/:webhookToken", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Webhook forwarder running on port ${PORT}`);
+app.post('/admin/block', express.json(), (req, res) => {
+  const { webhookId, webhookToken } = req.body;
+  if (!webhookId || !webhookToken) {
+    return res.status(400).json({ error: "webhookId and webhookToken required" });
+  }
+
+  if (!blockedWebhooks.some(w => w.id === webhookId && w.token === webhookToken)) {
+    blockedWebhooks.push({ id: webhookId, token: webhookToken });
+    saveBlocked();
+  }
+
+  res.json({ success: true, message: "Webhook blocked" });
+});
+
+app.get('/admin/logs', (req, res) => {
+  try {
+    const logs = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8'));
+    res.json(logs);
+  } catch {
+    res.json([]);
+  }
 });
